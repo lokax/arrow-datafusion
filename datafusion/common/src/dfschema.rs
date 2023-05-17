@@ -69,6 +69,7 @@ impl DFSchema {
             if let Some(qualifier) = field.qualifier() {
                 qualified_names.insert((qualifier, field.name()));
             } else if !unqualified_names.insert(field.name()) {
+                // 出现重复的名字
                 return Err(DataFusionError::SchemaError(
                     SchemaError::DuplicateUnqualifiedField {
                         name: field.name().to_string(),

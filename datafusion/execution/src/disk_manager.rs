@@ -44,6 +44,7 @@ pub enum DiskManagerConfig {
     Disabled,
 }
 
+// 默认从临时目录中创建临时文件
 impl Default for DiskManagerConfig {
     fn default() -> Self {
         Self::NewOs
@@ -107,6 +108,7 @@ impl DiskManager {
     /// If the file can not be created for some reason, returns an
     /// error message referencing the request description
     pub fn create_tmp_file(&self, request_description: &str) -> Result<NamedTempFile> {
+        // 加锁
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
             DataFusionError::ResourcesExhausted(format!(
@@ -116,6 +118,7 @@ impl DiskManager {
 
         // Create a temporary directory if needed
         if local_dirs.is_empty() {
+            // 创建一个临时目录
             let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
 
             debug!(
@@ -126,8 +129,9 @@ impl DiskManager {
 
             local_dirs.push(tempdir);
         }
-
+        // 生成一个随机数
         let dir_index = thread_rng().gen_range(0..local_dirs.len());
+        // 在对于的临时目录下创建一个临时文件
         Builder::new()
             .tempfile_in(&local_dirs[dir_index])
             .map_err(DataFusionError::IoError)
@@ -139,9 +143,12 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
     local_dirs
         .iter()
         .map(|root| {
+            // 如果这个目录还没有存在，则创建一个新的目录
             if !std::path::Path::new(root).exists() {
                 std::fs::create_dir(root)?;
             }
+            // 增加一个datafusion的前缀
+            // 在Dir中创建一个临时目录，TempDir对象被销毁时，临时目录会被自动删除掉
             Builder::new()
                 .prefix("datafusion-")
                 .tempdir_in(root)
@@ -232,13 +239,15 @@ mod tests {
         dirs: impl Iterator<Item = &'a Path>,
     ) {
         let dirs: Vec<&Path> = dirs.collect();
-
-        let found = dirs.iter().any(|file_path| {
+        let found = dirs.iter().any(|dir_path| {
             file_path
                 .ancestors()
-                .any(|candidate_path| *file_path == candidate_path)
+                .any(|candidate_path| 
+                    *dir_path == candidate_path
+                )
         });
 
         assert!(found, "Can't find {file_path:?} in dirs: {dirs:?}");
     }
+    
 }

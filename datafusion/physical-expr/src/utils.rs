@@ -143,6 +143,7 @@ pub fn normalize_out_expr_with_columns_map(
         .unwrap_or(expr)
 }
 
+// 全部替换成等价类的头部
 pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     eq_properties: &[EquivalentClass],

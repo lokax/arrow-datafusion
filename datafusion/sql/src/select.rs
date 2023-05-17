@@ -249,6 +249,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
+                // 为什么要带上fallback_schemas?
                 let fallback_schemas = plan.fallback_normalize_schemas();
                 let outer_query_schema = planner_context.outer_query_schema().cloned();
                 let outer_query_schema_vec = outer_query_schema
@@ -258,6 +259,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
+                // 收集FilterExpr涉及到哪些列
+                // 为什么还要收集一下UsingColumns?
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
@@ -271,6 +274,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Arc::new(plan),
                 )?))
             }
+            // 不存在谓词，则直接返回当前的Plan
             None => Ok(plan),
         }
     }
@@ -292,7 +296,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|t| self.plan_table_with_joins(t, planner_context));
 
                 let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
-
+                // 创建笛卡尔积
                 for right in plans {
                     left = left.cross_join(right?)?;
                 }

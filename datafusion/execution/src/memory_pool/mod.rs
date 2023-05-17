@@ -70,6 +70,7 @@ impl MemoryConsumer {
         }
     }
 
+    /// 移动所有权
     /// Set whether this allocation can be spilled to disk
     pub fn with_can_spill(self, can_spill: bool) -> Self {
         Self { can_spill, ..self }

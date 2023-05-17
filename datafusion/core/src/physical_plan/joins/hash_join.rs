@@ -210,12 +210,14 @@ impl ExecutionPlan for HashJoinExec {
         self.schema.clone()
     }
 
+    // 要求的输入数据分布情况
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match self.mode {
             PartitionMode::CollectLeft => vec![
                 Distribution::SinglePartition,
                 Distribution::UnspecifiedDistribution,
             ],
+            // 如果是分区模式的话
             PartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
@@ -227,6 +229,7 @@ impl ExecutionPlan for HashJoinExec {
                         )
                     })
                     .unzip();
+                // 要求哈希分区
                 vec![
                     Distribution::HashPartitioned(left_expr),
                     Distribution::HashPartitioned(right_expr),

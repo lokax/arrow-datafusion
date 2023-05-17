@@ -264,6 +264,7 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let options = config.options();
+        // clone一份逻辑计划
         let mut new_plan = plan.clone();
 
         let start_time = Instant::now();
@@ -274,7 +275,7 @@ impl Optimizer {
         let mut i = 0;
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
-
+            // 遍历每一个Rule，并开始递归的进行优化
             for rule in &self.rules {
                 let result = self.optimize_recursively(rule, &new_plan, config);
 
@@ -317,6 +318,7 @@ impl Optimizer {
             // HashSet::insert returns, whether the value was newly inserted.
             let plan_is_fresh =
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+            // 因为Plan没有改变，所以这个地方可以直接跳出了
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
@@ -377,6 +379,7 @@ impl Optimizer {
         match rule.apply_order() {
             Some(order) => match order {
                 ApplyOrder::TopDown => {
+                    // 先优化当前的Plan
                     let optimize_self_opt = self.optimize_node(rule, plan, config)?;
                     let optimize_inputs_opt = match &optimize_self_opt {
                         Some(optimized_plan) => {

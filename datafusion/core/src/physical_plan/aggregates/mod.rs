@@ -347,6 +347,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
+        // 创建Schema
         let schema = create_schema(
             &input.schema(),
             &group_by.expr,
@@ -360,7 +361,9 @@ impl AggregateExec {
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in group_by.expr.iter() {
+            // 如果当前表达式是Column表达式
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                // 该Column是Schema中的第几列
                 let new_col_idx = schema.index_of(name)?;
                 let entry = columns_map.entry(column.clone()).or_insert_with(Vec::new);
                 entry.push(Column::new(name, new_col_idx));
@@ -388,6 +391,7 @@ impl AggregateExec {
         &self.mode
     }
 
+    // 返回
     /// Grouping expressions
     pub fn group_expr(&self) -> &PhysicalGroupBy {
         &self.group_by
@@ -425,9 +429,11 @@ impl AggregateExec {
     ) -> Result<StreamType> {
         let batch_size = context.session_config().batch_size();
         let scalar_update_factor = context.session_config().agg_scalar_update_factor();
+        // 获取输入流
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
+        // 如果不存在分组
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self.mode,
@@ -440,6 +446,7 @@ impl AggregateExec {
                 partition,
             )?))
         } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
+            // 如果有顺序要求？
             Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
                 self.mode,
                 self.schema.clone(),
@@ -535,8 +542,10 @@ impl ExecutionPlan for AggregateExec {
             .map(|item: &AggregationOrdering| item.ordering.as_slice())
     }
 
+    // 聚合算子要求输入的分发类型
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
+            // 如果是
             AggregateMode::Partial | AggregateMode::Single => {
                 vec![Distribution::UnspecifiedDistribution]
             }
@@ -686,6 +695,7 @@ impl ExecutionPlan for AggregateExec {
     }
 }
 
+// 创建Schema
 fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],

@@ -240,6 +240,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn statistics(&self) -> Statistics;
 }
 
+/// 这个函数不知道干什么用的
+
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
 /// Currently there are 3 kinds of execution plan which needs data exchange
@@ -450,6 +452,8 @@ pub async fn collect_partitioned(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     let streams = execute_stream_partitioned(plan, context)?;
 
+    // 异步地去执行每一个任务
+    
     // Execute the plan and collect the results into batches.
     let handles = streams
         .into_iter()
@@ -471,7 +475,9 @@ pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
+    // 获取执行计划的输出分区数量
     let num_partitions = plan.output_partitioning().partition_count();
+    // 创建一个数组，保存每一个分区的Stream
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
         streams.push(plan.execute(i, context.clone())?);
@@ -520,7 +526,10 @@ impl Partitioning {
                             expr_list_eq_strict_order(&required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
                         // and normalize both exprs based on the eq_properties
+
+                        // TODO(lokax): 这里代码也写得太丑了吧
                         if !fast_match {
+                            // 获取等价属性和等价类
                             let eq_properties = equal_properties();
                             let eq_classes = eq_properties.classes();
                             if !eq_classes.is_empty() {

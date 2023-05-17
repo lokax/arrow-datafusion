@@ -242,6 +242,7 @@ impl Stream for GroupedHashAggregateStream {
         loop {
             match self.exec_state {
                 ExecutionState::ReadingInput => {
+                    // 读取输入流的数据
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
@@ -264,6 +265,7 @@ impl Stream for GroupedHashAggregateStream {
                         Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                         // inner is done, producing output
                         None => {
+                            // 转换状态
                             self.exec_state = ExecutionState::ProducingOutput;
                         }
                     }

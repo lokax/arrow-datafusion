@@ -1789,6 +1789,7 @@ impl StringifiedPlan {
         }
     }
 
+    /// explain verbose的用法会打印所有的逻辑计划，包括每一次应用Rule之后生成的计划
     /// returns true if this plan should be displayed. Generally
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {

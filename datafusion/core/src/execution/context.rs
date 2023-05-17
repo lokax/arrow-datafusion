@@ -1758,6 +1758,7 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        // 如果当前是LogicalExplain的话
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
@@ -1774,6 +1775,7 @@ impl SessionState {
                 Ok(plan) => plan,
                 Err(DataFusionError::Context(analyzer_name, err)) => {
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
+                    // TODO(lokax): 注意这里保存了失败的信息进去
                     stringified_plans
                         .push(StringifiedPlan::new(plan_type, err.to_string()));
 
@@ -1788,6 +1790,7 @@ impl SessionState {
                 Err(e) => return Err(e),
             };
 
+            // 保存最后生成的plan信息
             // to delineate the analyzer & optimizer phases in explain output
             stringified_plans
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
@@ -1811,6 +1814,9 @@ impl SessionState {
                 }
                 Err(e) => return Err(e),
             };
+
+            // 注意这里没有为Optimizer最后生成的plan生成StringifiedPlan
+            // 而是在planner.rs中通过检查logical_optimization_succeeded = true来判断
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,

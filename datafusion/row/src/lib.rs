@@ -73,6 +73,7 @@ impl MutableRecordBatch {
     }
 }
 
+// 创建ArrayBuilder
 fn new_arrays(schema: &Schema, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
     schema
         .fields()

@@ -70,6 +70,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // 默认是cpu的核数
         let target_partitions = config.execution.target_partitions;
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
         let new_plan = if top_down_join_key_reordering {
@@ -148,6 +149,7 @@ fn adjust_input_keys_ordering(
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
     let plan_any = requirements.plan.as_any();
+    // 如果当前算子是HashJoinExec
     let transformed = if let Some(HashJoinExec {
         left,
         right,
@@ -547,6 +549,8 @@ fn shift_right_required(
 fn reorder_join_keys_to_inputs(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
+    // 为什么要重排呢，不太能理解
+    // 当前算子是HashJoin算子
     let plan_any = plan.as_any();
     if let Some(HashJoinExec {
         left,
@@ -576,6 +580,7 @@ fn reorder_join_keys_to_inputs(
                     &right.equivalence_properties(),
                 ) {
                     if !new_positions.is_empty() {
+                        // 创建新的join_condition并更新的HashJoin算子
                         let new_join_on = new_join_conditions(&left_keys, &right_keys);
                         Ok(Arc::new(HashJoinExec::try_new(
                             left.clone(),
@@ -587,6 +592,7 @@ fn reorder_join_keys_to_inputs(
                             *null_equals_null,
                         )?))
                     } else {
+                        // 如果new_postion是empty，则直接返回plan就行了
                         Ok(plan)
                     }
                 } else {
@@ -680,12 +686,14 @@ fn try_reorder(
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
+    // 如果长度不相等，直接可以返回
     if join_keys.left_keys.len() != expected.len() {
         return None;
     }
     if expr_list_eq_strict_order(expected, &join_keys.left_keys)
         || expr_list_eq_strict_order(expected, &join_keys.right_keys)
     {
+        // 相等的话直接返回
         return Some((join_keys, vec![]));
     } else if !equivalence_properties.classes().is_empty() {
         normalized_expected = expected
@@ -723,12 +731,14 @@ fn try_reorder(
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
+        // 使用等价类处理一下再次进行判断
         if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
             || expr_list_eq_strict_order(&normalized_expected, &normalized_right_keys)
         {
             return Some((join_keys, vec![]));
         }
     }
+    // 如果还是不相等的话
 
     let new_positions = expected_expr_positions(&join_keys.left_keys, expected)
         .or_else(|| expected_expr_positions(&join_keys.right_keys, expected))
@@ -855,10 +865,12 @@ fn ensure_distribution(
         }
     }
 
+    // 要求的输入分布情况
     let required_input_distributions = plan.required_input_distribution();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
     assert_eq!(children.len(), required_input_distributions.len());
 
+    // 遍历每一个孩子
     // Add RepartitionExec to guarantee output partitioning
     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .into_iter()
@@ -868,9 +880,12 @@ fn ensure_distribution(
                 .output_partitioning()
                 .satisfy(required.clone(), || child.equivalence_properties())
             {
+                // 如果孩子的分区情况符合当前算子要求的输入分布情况的话，则什么都不需要做
                 Ok(child)
             } else {
                 let new_child: Result<Arc<dyn ExecutionPlan>> = match required {
+                    // 如果要求输入是单个分区的话
+                    // 并且孩子的分区数量超过1的话，则创建一个CoalescePartitionsExec算子
                     Distribution::SinglePartition
                         if child.output_partitioning().partition_count() > 1 =>
                     {
@@ -1716,6 +1731,7 @@ mod tests {
             ("b".to_string(), "B".to_string()),
             ("c".to_string(), "C".to_string()),
         ];
+        // 在JoinExec算子上创建一个Projection
         let bottom_left_projection =
             projection_exec_with_alias(bottom_left_join, alias_pairs);
 
@@ -1774,6 +1790,7 @@ mod tests {
                 &top_join_on,
                 &join_type,
             );
+
             let top_join_plan =
                 format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(Column {{ name: \"AA\", index: 1 }}, Column {{ name: \"a1\", index: 5 }}), (Column {{ name: \"B\", index: 2 }}, Column {{ name: \"b1\", index: 6 }}), (Column {{ name: \"C\", index: 3 }}, Column {{ name: \"c\", index: 2 }})]", &join_type);
 
@@ -1784,11 +1801,14 @@ mod tests {
                 top_join_plan.as_str(),
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 })]",
+                // 这里需要重新分区
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }], 10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                // 这里也需要重新分区
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -1905,14 +1925,19 @@ mod tests {
                 top_join_plan.as_str(),
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 })]",
+                
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }], 10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
+
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+
                 "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",

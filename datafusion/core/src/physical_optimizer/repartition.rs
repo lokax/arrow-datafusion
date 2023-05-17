@@ -278,7 +278,9 @@ impl PhysicalOptimizerRule for Repartition {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // 默认是cpu的核数
         let target_partitions = config.execution.target_partitions;
+        //是否启动循环分区
         let enabled = config.optimizer.enable_round_robin_repartition;
         let repartition_file_scans = config.optimizer.repartition_file_scans;
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;

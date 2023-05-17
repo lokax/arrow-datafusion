@@ -29,10 +29,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
+            // 如果是普通的Table
             TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
                 let table_ref = self.object_name_to_table_reference(name)?;
                 let table_name = table_ref.to_string();
+                // 检查是否是CTE
                 let cte = planner_context.get_cte(&table_name);
                 (
                     match (

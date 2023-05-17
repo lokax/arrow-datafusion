@@ -49,6 +49,7 @@ pub fn read_as_batch(
     offsets: &[usize],
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
+    // 创建一个RecordBatch
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
     let mut row = RowReader::new(&schema);
 
@@ -167,6 +168,7 @@ impl<'a> RowReader<'a> {
         }
     }
 
+    // 检查所有列是否都不是NULL
     #[inline(always)]
     fn all_valid(&self) -> bool {
         if self.null_free() {
@@ -256,6 +258,7 @@ impl<'a> RowReader<'a> {
 /// Read the row currently pointed by RowWriter to the output columnar batch buffer
 pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema) {
     if row.all_valid() {
+        // arrays是一个Builder
         for ((col_idx, to), field) in batch
             .arrays
             .iter_mut()
@@ -280,6 +283,7 @@ macro_rules! fn_read_field {
     ($NATIVE: ident, $ARRAY: ident) => {
         paste::item! {
             pub(crate) fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+                // 向下类型转换为特定类型的ArrayBuilder
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()

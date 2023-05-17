@@ -79,6 +79,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         }
 
         match (idx1, idx2) {
+            // 合并两个等价类
             (Some(idx_1), Some(idx_2)) if idx_1 != idx_2 => {
                 // need to merge the two existing EquivalentClasses
                 let second_eq_class = self.classes.get(idx_2).unwrap().clone();
@@ -91,6 +92,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
                 self.classes.remove(idx_2);
             }
             (None, None) => {
+                // 创建一个新的等价类
                 // adding new pairs
                 self.classes.push(EquivalentClass::<T>::new(
                     new_conditions.0.clone(),
@@ -254,6 +256,7 @@ pub fn project_equivalence_properties(
                 break;
             }
         }
+        // 如果没有发现匹配的列，那就创建一个新的等价类
         if !find_match {
             ec_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
         }
@@ -301,6 +304,7 @@ fn prune_columns_to_remove<T: Eq + Hash + Clone + ColumnAccessor>(
 ) {
     let schema = eq_properties.schema();
     let fields = schema.fields();
+    // 遍历每一个等价类
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()

@@ -154,6 +154,7 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut partitions = vec![];
         for arc_inner_vec in self.batches.iter() {
+            // 异步的去加读锁？
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
@@ -195,6 +196,7 @@ impl TableProvider for MemTable {
         }
 
         let input = if self.batches.len() > 1 {
+            // 创建一个分区算子？
             Arc::new(RepartitionExec::try_new(
                 input,
                 Partitioning::RoundRobinBatch(self.batches.len()),
@@ -461,6 +463,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         // Create and register the initial table with the provided schema and data
         let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
+        // 注册一张表
         session_ctx.register_table("t", initial_table.clone())?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);

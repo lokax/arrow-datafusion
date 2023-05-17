@@ -105,14 +105,17 @@ async fn load_left_input(
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
     let merge = {
+        // 使用CoalescePartitionsExec算子合并输入算子的所有分区
         if left.output_partitioning().partition_count() != 1 {
             Arc::new(CoalescePartitionsExec::new(left.clone()))
         } else {
             left.clone()
         }
     };
+    // 获取输入流
     let stream = merge.execute(0, context)?;
-
+    // 注意CoalescePartitionsExec算子内部会并发地处理数据
+    // 有点类似于Exchange算子一样
     // Load all batches and count the rows
     let (batches, num_rows, _, reservation) = stream
         .try_fold(
@@ -133,7 +136,8 @@ async fn load_left_input(
             },
         )
         .await?;
-
+    
+    // 把batch数组合并成一个batch
     let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
 
     Ok((merged_batch, reservation))
@@ -216,6 +220,7 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // 计算右表某个分区的输入流
         let stream = self.right.execute(partition, context.clone())?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -224,6 +229,7 @@ impl ExecutionPlan for CrossJoinExec {
         let reservation =
             MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
+        // 注意self.left_fut只会运行一次
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 self.left.clone(),
@@ -237,7 +243,7 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_fut,
             right: stream,
-            right_batch: Arc::new(parking_lot::Mutex::new(None)),
+            right_batch: Arc::new(parking_lot::Mutex::new(None)), // 为什么要创建一把锁？
             left_index: 0,
             join_metrics,
         }))
@@ -398,6 +404,7 @@ impl CrossJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
+        // 左表的数据只能单线程获取吗？
         let (left_data, _) = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
@@ -411,6 +418,7 @@ impl CrossJoinStream {
         if self.left_index > 0 && self.left_index < left_data.num_rows() {
             let join_timer = self.join_metrics.join_time.timer();
             let right_batch = {
+                // 为什么要加锁？
                 let right_batch = self.right_batch.lock();
                 right_batch.clone().unwrap()
             };
@@ -431,6 +439,7 @@ impl CrossJoinStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let join_timer = self.join_metrics.join_time.timer();
+                    // 构建result batch
                     let result =
                         build_batch(self.left_index, &batch, left_data, &self.schema);
                     self.join_metrics.input_batches.add(1);
@@ -440,8 +449,11 @@ impl CrossJoinStream {
                         self.join_metrics.output_batches.add(1);
                         self.join_metrics.output_rows.add(batch.num_rows());
                     }
+                    // left_index + 1
                     self.left_index = 1;
 
+                    // right_batch加锁，并把batch保存到right_batch中
+                    // 真的有必要加锁吗？
                     let mut right_batch = self.right_batch.lock();
                     *right_batch = Some(batch);
 

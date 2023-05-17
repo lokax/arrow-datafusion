@@ -32,7 +32,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Such as `select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1, (WITH source AS (select 1 as e) SELECT * FROM source) t2;` which is valid.
         // So always use original global CTEs to plan CTEs in from clause.
         // Btw, don't need to add CTEs in from to global CTEs.
+
+        // 先clone一份当前的planner_context
         let origin_planner_context = planner_context.clone();
+        // 然后开始创建relation
         let left = self.create_relation(t.relation, planner_context)?;
         match t.joins.len() {
             0 => {
@@ -112,6 +115,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    // 返回一个CrossJoin
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
@@ -151,6 +155,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .join_using(right, join_type, keys)?
                     .build()
             }
+            // 自然连接
             JoinConstraint::Natural => {
                 let left_cols: HashSet<&String> = left
                     .schema()

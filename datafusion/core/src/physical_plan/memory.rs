@@ -95,6 +95,7 @@ impl ExecutionPlan for MemoryExec {
         )))
     }
 
+    // 算子执行
     fn execute(
         &self,
         partition: usize,
@@ -144,6 +145,7 @@ impl MemoryExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
+        // 创建投影后的Schema
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
@@ -237,6 +239,7 @@ impl Stream for MemoryStream {
     }
 }
 
+// 实现RecordBatchStream Trait
 impl RecordBatchStream for MemoryStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
@@ -325,6 +328,7 @@ impl ExecutionPlan for MemoryWriteExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_count = self.batches.len();
+        // 从输入中获取对应分区的数据
         let data = self.input.execute(partition, context)?;
         let schema = self.schema.clone();
         let state = StreamState {

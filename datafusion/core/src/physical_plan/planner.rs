@@ -681,11 +681,13 @@ impl DefaultPhysicalPlanner {
                     aggr_expr,
                     ..
                 }) => {
+                    // 首先递归地为输入算子创建物理计划
                     // Initially need to perform the aggregate and then merge the partitions
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let physical_input_schema = input_exec.schema();
                     let logical_input_schema = input.as_ref().schema();
 
+                    // 创建物理GroupBy算子
                     let groups = self.create_grouping_physical_expr(
                         group_expr,
                         logical_input_schema,
@@ -705,6 +707,7 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<_>>>()?;
                     let (aggregates, filters): (Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
 
+                    // 创建Partial聚合算子
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
@@ -725,6 +728,7 @@ impl DefaultPhysicalPlanner {
                         Arc<dyn ExecutionPlan>,
                         AggregateMode,
                     ) = if can_repartition {
+                        // 如果能够分区
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
                         (initial_aggr, AggregateMode::FinalPartitioned)
                     } else {
@@ -1244,6 +1248,7 @@ impl DefaultPhysicalPlanner {
         input_schema: &Schema,
         session_state: &SessionState,
     ) -> Result<PhysicalGroupBy> {
+        // 如果分组表达式的长度为1
         if group_expr.len() == 1 {
             match &group_expr[0] {
                 Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
@@ -1746,30 +1751,36 @@ impl DefaultPhysicalPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // 如果当前的逻辑计划是Explain算子
         if let LogicalPlan::Explain(e) = logical_plan {
             use PlanType::*;
             let mut stringified_plans = vec![];
 
             let config = &session_state.config_options().explain;
 
+            // 不只是打印物理计划，所以这里需要将之前每个优化阶段保存的逻辑计划也进行打印
             if !config.physical_plan_only {
                 stringified_plans = e.stringified_plans.clone();
+                // 如果最后优化成功
                 if e.logical_optimization_succeeded {
                     stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
                 }
             }
 
+            // 如果不只是打印逻辑计划并且逻辑计划成功生成的话
             if !config.logical_plan_only && e.logical_optimization_succeeded {
                 match self
                     .create_initial_plan(e.plan.as_ref(), session_state)
                     .await
                 {
                     Ok(input) => {
+                        // 保存初始的物理计划
                         stringified_plans.push(
                             displayable(input.as_ref())
                                 .to_stringified(InitialPhysicalPlan),
                         );
 
+                        // 对物理计划进行优化
                         match self.optimize_internal(
                             input,
                             session_state,
@@ -1780,10 +1791,12 @@ impl DefaultPhysicalPlanner {
                                     .push(displayable(plan).to_stringified(plan_type));
                             },
                         ) {
+                            // 保存最后的物理计划
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
                                     .to_stringified(FinalPhysicalPlan),
                             ),
+                            // 出错的话，则保存出错信息
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans
@@ -1803,6 +1816,7 @@ impl DefaultPhysicalPlanner {
                 e.verbose,
             ))))
         } else {
+            // 否则直接返回None
             Ok(None)
         }
     }

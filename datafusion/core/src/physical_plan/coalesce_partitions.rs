@@ -86,6 +86,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
+
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
@@ -111,6 +112,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // 分区必须是0，因为这个算子只有一个分区
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -118,6 +120,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             )));
         }
 
+        // 输入分区的数量
         let input_partitions = self.input.output_partitioning().partition_count();
         match input_partitions {
             0 => Err(DataFusionError::Internal(
@@ -143,6 +146,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
                 let mut join_handles = Vec::with_capacity(input_partitions);
+                // 遍历每一个分区
                 for part_i in 0..input_partitions {
                     join_handles.push(spawn_execution(
                         self.input.clone(),

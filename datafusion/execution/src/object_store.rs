@@ -50,6 +50,7 @@ impl ObjectStoreUrl {
         Ok(Self { url: parsed })
     }
 
+    /// File协议，用来读取本地文件
     /// An [`ObjectStoreUrl`] for the local filesystem
     pub fn local_filesystem() -> Self {
         Self::parse("file://").unwrap()
@@ -170,6 +171,7 @@ impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        // 默认注册一个File协议
         object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self { object_stores }
     }
@@ -190,6 +192,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
+        // 协议号、主机和端口作为Key
         let s = get_url_key(url);
         self.object_stores.insert(s, store)
     }
@@ -223,6 +226,7 @@ mod tests {
 
     #[test]
     fn test_object_store_url() {
+        // 末尾要加一个'/'
         let file = ObjectStoreUrl::parse("file://").unwrap();
         assert_eq!(file.as_str(), "file:///");
 
