@@ -480,10 +480,12 @@ mod tests {
                 PhysicalGroupBy::default(),
                 vec![],
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         PhysicalGroupBy::default(),
+                        vec![],
                         vec![],
                         vec![],
                         input,

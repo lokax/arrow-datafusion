@@ -42,7 +42,7 @@ use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
-    PhysicalExpr,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use std::sync::Arc;
 
@@ -256,6 +256,7 @@ fn adjust_input_keys_ordering(
         group_by,
         aggr_expr,
         filter_expr,
+        order_by_expr,
         input,
         input_schema,
         ..
@@ -269,6 +270,7 @@ fn adjust_input_keys_ordering(
                     group_by,
                     aggr_expr,
                     filter_expr,
+                    order_by_expr,
                     input.clone(),
                     input_schema,
                 )?),
@@ -369,12 +371,14 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reorder_aggregate_keys(
     agg_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
     filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
+    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
 ) -> Result<PlanWithKeyRequirements> {
@@ -405,6 +409,7 @@ fn reorder_aggregate_keys(
                     group_by,
                     aggr_expr,
                     filter_expr,
+                    order_by_expr,
                     input,
                     input_schema,
                     ..
@@ -424,6 +429,7 @@ fn reorder_aggregate_keys(
                             new_partial_group_by,
                             aggr_expr.clone(),
                             filter_expr.clone(),
+                            order_by_expr.clone(),
                             input.clone(),
                             input_schema.clone(),
                         )?))
@@ -455,6 +461,7 @@ fn reorder_aggregate_keys(
                         new_group_by,
                         aggr_expr.to_vec(),
                         filter_expr.to_vec(),
+                        order_by_expr.to_vec(),
                         partial_agg,
                         input_schema.clone(),
                     )?);
@@ -1119,10 +1126,12 @@ mod tests {
                 final_grouping,
                 vec![],
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
+                        vec![],
                         vec![],
                         vec![],
                         input,
