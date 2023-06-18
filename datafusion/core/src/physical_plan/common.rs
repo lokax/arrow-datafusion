@@ -103,6 +103,7 @@ pub(crate) fn spawn_execution(
     partition: usize,
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {
+    // 创建一个异步任务
     tokio::spawn(async move {
         let mut stream = match input.execute(partition, context) {
             Err(e) => {
@@ -118,6 +119,7 @@ pub(crate) fn spawn_execution(
             Ok(stream) => stream,
         };
 
+        // 不断从流中获取数据
         while let Some(item) = stream.next().await {
             // If send fails, plan being torn down,
             // there is no place to send the error.
@@ -200,6 +202,7 @@ pin_project! {
     /// Useful to kill background tasks when the consumer is dropped.
     #[derive(Debug)]
     pub struct AbortOnDropSingle<T>{
+        // 注意JoinHandle也实现了Future，所以需要Pin住
         #[pin]
         join_handle: JoinHandle<T>,
     }
@@ -218,10 +221,13 @@ impl<T> AbortOnDropSingle<T> {
     }
 }
 
+// AbortOnDropSingle实现了Future Trait
 impl<T> Future for AbortOnDropSingle<T> {
     type Output = Result<T, tokio::task::JoinError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // 因为pin_project!宏，所以这里可以调用self.project()函数
+        // 注意JoinHandle也实现了Future，所以需要Pin住
         let this = self.project();
         this.join_handle.poll(cx)
     }

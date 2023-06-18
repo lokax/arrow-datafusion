@@ -328,6 +328,7 @@ fn reorder_partitioned_join_keys<F>(
 where
     F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Result<Arc<dyn ExecutionPlan>>,
 {
+    // 按照父亲的要求去重排
     let join_key_pairs = extract_join_keys(on);
     if let Some((
         JoinKeyPairs {

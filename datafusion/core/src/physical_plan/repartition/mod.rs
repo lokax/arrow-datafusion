@@ -175,7 +175,7 @@ impl BatchPartitioner {
 
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
-
+                    // 计算哈希值
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
@@ -204,7 +204,8 @@ impl BatchPartitioner {
                                         .map_err(DataFusionError::ArrowError)
                                 })
                                 .collect::<Result<Vec<ArrayRef>>>()?;
-
+                            
+                            // 创建新的RecordBatch
                             let batch =
                                 RecordBatch::try_new(batch.schema(), columns).unwrap();
 
@@ -332,10 +333,12 @@ impl ExecutionPlan for RepartitionExec {
         Ok(children[0])
     }
 
+    // 输出分区策略
     fn output_partitioning(&self) -> Partitioning {
         self.partitioning.clone()
     }
 
+    
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         if self.maintains_input_order()[0] {
             self.input().output_ordering()
@@ -365,7 +368,9 @@ impl ExecutionPlan for RepartitionExec {
         // lock mutexes
         let mut state = self.state.lock();
 
+        // 输入分区数量
         let num_input_partitions = self.input.output_partitioning().partition_count();
+        // 输出分区数量
         let num_output_partitions = self.partitioning.partition_count();
 
         // if this is the first partition to be invoked then we need to set up initial state
@@ -373,6 +378,8 @@ impl ExecutionPlan for RepartitionExec {
             // create one channel per *output* partition
             // note we use a custom channel that ensures there is always data for each receiver
             // but limits the amount of buffering if required.
+
+            // 注意这里创建的channel数量是和输出分区相等的
             let (txs, rxs) = channels(num_output_partitions);
             for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
                 let reservation = Arc::new(Mutex::new(
@@ -384,7 +391,9 @@ impl ExecutionPlan for RepartitionExec {
 
             // launch one async task per *input* partition
             let mut join_handles = Vec::with_capacity(num_input_partitions);
+            // 遍历每一个输入分区
             for i in 0..num_input_partitions {
+                // TODO(lokax): 是否可以只收集一份呢
                 let txs: HashMap<_, _> = state
                     .channels
                     .iter()
@@ -393,14 +402,16 @@ impl ExecutionPlan for RepartitionExec {
                     })
                     .collect();
 
+                // 创建指标
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
+                // 创建一个输入任务
                 let input_task: JoinHandle<Result<()>> =
                     tokio::spawn(Self::pull_from_input(
                         self.input.clone(),
-                        i,
-                        txs.clone(),
-                        self.partitioning.clone(),
+                        i, // i是分区号
+                        txs.clone(), // 保存了输出分区的channel
+                        self.partitioning.clone(), // 输出分区策略
                         r_metrics,
                         context.clone(),
                     ));
@@ -505,6 +516,7 @@ impl RepartitionExec {
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
+        // 获取某个输入分区的输入流
         let mut stream = input.execute(i, context)?;
         timer.done();
 
@@ -531,7 +543,7 @@ impl RepartitionExec {
                 // if there is still a receiver, send to it
                 if let Some((tx, reservation)) = txs.get_mut(&partition) {
                     reservation.lock().try_grow(size)?;
-
+                    // 如果发送失败
                     if tx.send(Some(Ok(batch))).await.is_err() {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         reservation.lock().shrink(size);
@@ -564,7 +576,7 @@ impl RepartitionExec {
                 batches_until_yield -= 1;
             }
         }
-
+        // 没有数据的时候才返回
         Ok(())
     }
 
@@ -582,6 +594,7 @@ impl RepartitionExec {
         match input_task.await {
             // Error in joining task
             Err(e) => {
+                // JoinHandle出错
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
@@ -594,9 +607,11 @@ impl RepartitionExec {
             }
             // Error from running input task
             Ok(Err(e)) => {
+                // 输入算子在执行过程中出错
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
+                    // TODO(lokax): 这里不应该包裹成外部错误啊？
                     // wrap it because need to send error to all output partitions
                     let err = Err(DataFusionError::External(Box::new(e.clone())));
                     tx.send(Some(err)).await.ok();
