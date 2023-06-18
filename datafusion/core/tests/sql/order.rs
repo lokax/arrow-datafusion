@@ -16,9 +16,9 @@
 // under the License.
 
 use super::*;
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion_expr::logical_plan::DdlStatement;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
@@ -56,10 +56,7 @@ async fn create_external_table_with_order() -> Result<()> {
     let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
     let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
     assert_eq!(cmd.order_exprs.len(), 1);
-    assert_eq!(
-        &cmd.order_exprs,
-        table.options().file_sort_order.as_ref().unwrap()
-    );
+    assert_eq!(cmd.order_exprs, table.options().file_sort_order);
     Ok(())
 }
 
@@ -105,7 +102,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         t1_schema.clone(),
         vec![
             Arc::new(Int32Array::from(vec![2, 4, 9, 3, 4])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d", "e"])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;

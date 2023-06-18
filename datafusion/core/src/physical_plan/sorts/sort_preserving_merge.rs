@@ -23,17 +23,17 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
@@ -158,9 +158,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )));
         }
 
-        let tracking_metrics =
-            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
-
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(
             "Number of input partitions of  SortPreservingMergeExec::execute: {}",
@@ -193,7 +190,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     receivers,
                     schema,
                     &self.expr,
-                    tracking_metrics,
+                    BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
                 )?;
 
@@ -234,11 +231,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use futures::FutureExt;
-    use tokio_stream::StreamExt;
+    use futures::{FutureExt, StreamExt};
 
-    use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -250,6 +244,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
+    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 
     use super::*;
 
@@ -257,7 +252,7 @@ mod tests {
     async fn test_merge_interleave() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("c"),
@@ -268,7 +263,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("b"),
             Some("d"),
@@ -306,7 +301,7 @@ mod tests {
     async fn test_merge_some_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -317,7 +312,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([70, 90, 30, 100, 110]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![70, 90, 30, 100, 110]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("c"),
             Some("d"),
@@ -355,7 +350,7 @@ mod tests {
     async fn test_merge_no_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -366,7 +361,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -404,7 +399,7 @@ mod tests {
     async fn test_merge_three_partitions() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -415,7 +410,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("e"),
             Some("g"),
@@ -427,7 +422,7 @@ mod tests {
             Arc::new(TimestampNanosecondArray::from(vec![40, 60, 20, 20, 60]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([100, 200, 700, 900, 300]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 700, 900, 300]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -700,7 +695,7 @@ mod tests {
     async fn test_nulls() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("a"),
@@ -717,7 +712,7 @@ mod tests {
         ]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("b"),
@@ -795,9 +790,12 @@ mod tests {
         let mut streams = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 1);
+
+            let sender = builder.tx();
+
             let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
-            let join_handle = tokio::spawn(async move {
+            builder.spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
                     // This causes the MergeStream to wait for more input
@@ -805,22 +803,16 @@ mod tests {
                 }
             });
 
-            streams.push(RecordBatchReceiverStream::create(
-                &schema,
-                receiver,
-                join_handle,
-            ));
+            streams.push(builder.build());
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
-            tracking_metrics,
+            BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
         )
         .unwrap();
@@ -848,11 +840,11 @@ mod tests {
     async fn test_merge_metrics() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("b"), Some("d")]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 

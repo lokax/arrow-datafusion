@@ -33,7 +33,6 @@ use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -41,8 +40,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
-    PhysicalExpr, PhysicalSortExpr,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
 };
 use std::sync::Arc;
 
@@ -251,28 +249,13 @@ fn adjust_input_keys_ordering(
             sort_options.clone(),
             &join_constructor,
         )?)
-    } else if let Some(AggregateExec {
-        mode,
-        group_by,
-        aggr_expr,
-        filter_expr,
-        order_by_expr,
-        input,
-        input_schema,
-        ..
-    }) = plan_any.downcast_ref::<AggregateExec>()
-    {
+    } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
-            match mode {
+            match aggregate_exec.mode {
                 AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
-                    group_by,
-                    aggr_expr,
-                    filter_expr,
-                    order_by_expr,
-                    input.clone(),
-                    input_schema,
+                    aggregate_exec,
                 )?),
                 _ => Some(PlanWithKeyRequirements::new(requirements.plan.clone())),
             }
@@ -372,18 +355,13 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn reorder_aggregate_keys(
     agg_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
-    group_by: &PhysicalGroupBy,
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-    filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
-    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
-    agg_input: Arc<dyn ExecutionPlan>,
-    input_schema: &SchemaRef,
+    agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
-    let out_put_columns = group_by
+    let out_put_columns = agg_exec
+        .group_by
         .expr()
         .iter()
         .enumerate()
@@ -396,7 +374,7 @@ fn reorder_aggregate_keys(
         .collect::<Vec<_>>();
 
     if parent_required.len() != out_put_exprs.len()
-        || !group_by.null_expr().is_empty()
+        || !agg_exec.group_by.null_expr().is_empty()
         || expr_list_eq_strict_order(&out_put_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
@@ -415,7 +393,7 @@ fn reorder_aggregate_keys(
                     input_schema,
                     ..
                 }) =
-                    agg_input.as_any().downcast_ref::<AggregateExec>()
+                    agg_exec.input.as_any().downcast_ref::<AggregateExec>()
                 {
                     if matches!(mode, AggregateMode::Partial) {
                         let mut new_group_exprs = vec![];
@@ -460,11 +438,11 @@ fn reorder_aggregate_keys(
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
-                        aggr_expr.to_vec(),
-                        filter_expr.to_vec(),
-                        order_by_expr.to_vec(),
+                        agg_exec.aggr_expr.to_vec(),
+                        agg_exec.filter_expr.to_vec(),
+                        agg_exec.order_by_expr.to_vec(),
                         partial_agg,
-                        input_schema.clone(),
+                        agg_exec.input_schema.clone(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -1015,12 +993,12 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::joins::{
         utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
     };
@@ -1038,11 +1016,11 @@ mod tests {
     }
 
     fn parquet_exec() -> Arc<ParquetExec> {
-        parquet_exec_with_sort(None)
+        parquet_exec_with_sort(vec![])
     }
 
     fn parquet_exec_with_sort(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -1063,7 +1041,7 @@ mod tests {
 
     // Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -2181,7 +2159,7 @@ mod tests {
         }];
 
         // Scan some sorted parquet files
-        let exec = parquet_exec_multiple_sorted(Some(sort_key.clone()));
+        let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
         // CoalesceBatchesExec to mimic behavior after a filter
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));

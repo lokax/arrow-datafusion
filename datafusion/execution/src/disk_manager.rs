@@ -239,12 +239,11 @@ mod tests {
         dirs: impl Iterator<Item = &'a Path>,
     ) {
         let dirs: Vec<&Path> = dirs.collect();
+
         let found = dirs.iter().any(|dir_path| {
             file_path
                 .ancestors()
-                .any(|candidate_path| 
-                    *dir_path == candidate_path
-                )
+                .any(|candidate_path| *dir_path == candidate_path)
         });
 
         assert!(found, "Can't find {file_path:?} in dirs: {dirs:?}");

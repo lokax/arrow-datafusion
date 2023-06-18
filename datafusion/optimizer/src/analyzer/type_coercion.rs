@@ -28,6 +28,7 @@ use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
     ScalarUDF, WindowFunction,
 };
+use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -40,14 +41,14 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
-    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, type_coercion, AggregateFunction, BuiltinScalarFunction, Expr,
+    LogicalPlan, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::{merge_schema, rewrite_preserving_name};
+use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -380,13 +381,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(expr)
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let nex_expr = coerce_arguments_for_signature(
+                let new_args = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &function::signature(&fun),
+                    &fun.signature(),
                 )?;
-                let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
-                Ok(expr)
+                let new_args =
+                    coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
+                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
@@ -593,6 +595,39 @@ fn coerce_arguments_for_signature(
         .enumerate()
         .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
         .collect::<Result<Vec<_>>>()
+}
+
+fn coerce_arguments_for_fun(
+    expressions: &[Expr],
+    schema: &DFSchema,
+    fun: &BuiltinScalarFunction,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if *fun == BuiltinScalarFunction::MakeArray {
+        // Find the final data type for the function arguments
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_type = current_types
+            .iter()
+            .skip(1)
+            .fold(current_types.first().unwrap().clone(), |acc, x| {
+                comparison_coercion(&acc, x).unwrap_or(acc)
+            });
+
+        return expressions
+            .iter()
+            .enumerate()
+            .map(|(_, expr)| cast_expr(expr, &new_type, schema))
+            .collect();
+    }
+
+    Ok(expressions.to_vec())
 }
 
 /// Cast `expr` to the specified type, if possible
@@ -986,7 +1021,7 @@ mod test {
     }
 
     #[test]
-    fn binary_op_date32_add_interval() -> Result<()> {
+    fn binary_op_date32_op_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
             + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
@@ -1212,7 +1247,7 @@ mod test {
 
             let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
             let expected =
-                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 

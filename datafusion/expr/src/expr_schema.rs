@@ -22,10 +22,7 @@ use crate::expr::{
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
-use crate::type_coercion::other::get_coerce_type_for_case_expression;
-use crate::{
-    aggregate_function, function, window_function, LogicalPlan, Projection, Subquery,
-};
+use crate::{aggregate_function, window_function, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
@@ -73,26 +70,7 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
-            Expr::Case(case) => {
-                // https://github.com/apache/arrow-datafusion/issues/5821
-                // when #5681 will be fixed, this code can be reverted to:
-                // case.when_then_expr[0].1.get_type(schema)
-                let then_types = case
-                    .when_then_expr
-                    .iter()
-                    .map(|when_then| when_then.1.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                let else_type = match &case.else_expr {
-                    None => Ok(None),
-                    Some(expr) => expr.get_type(schema).map(Some),
-                }?;
-                get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(String::from(
-                            "Cannot infer type for CASE statement",
-                        ))
-                    })
-            }
+            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarUDF(ScalarUDF { fun, args }) => {
@@ -107,7 +85,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                function::return_type(fun, &data_types)
+                fun.return_type(&data_types)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -225,7 +203,8 @@ impl ExprSchemable for Expr {
             | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. } => Ok(true),
+            | Expr::AggregateUDF { .. }
+            | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -234,8 +213,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. }
-            | Expr::Placeholder(_) => Ok(true),
+            | Expr::Exists { .. } => Ok(false),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -355,7 +333,14 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::Column;
+    use datafusion_common::{Column, ScalarValue};
+
+    macro_rules! test_is_expr_nullable {
+        ($EXPR_TYPE:ident) => {{
+            let expr = lit(ScalarValue::Null).$EXPR_TYPE();
+            assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        }};
+    }
 
     #[test]
     fn expr_schema_nullability() {
@@ -364,6 +349,15 @@ mod tests {
         assert!(expr
             .nullable(&MockExprSchema::new().with_nullable(true))
             .unwrap());
+
+        test_is_expr_nullable!(is_null);
+        test_is_expr_nullable!(is_not_null);
+        test_is_expr_nullable!(is_true);
+        test_is_expr_nullable!(is_not_true);
+        test_is_expr_nullable!(is_false);
+        test_is_expr_nullable!(is_not_false);
+        test_is_expr_nullable!(is_unknown);
+        test_is_expr_nullable!(is_not_unknown);
     }
 
     #[test]

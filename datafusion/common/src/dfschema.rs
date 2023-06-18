@@ -385,8 +385,12 @@ impl DFSchema {
         let self_fields = self.fields().iter();
         let other_fields = other.fields().iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
-            f1.qualifier() == f2.qualifier()
-                && f1.name() == f2.name()
+            // TODO: resolve field when exist alias
+            // f1.qualifier() == f2.qualifier()
+            //     && f1.name() == f2.name()
+            // column(t1.a) field is "t1"."a"
+            // column(x) as t1.a field is ""."t1.a"
+            f1.qualified_name() == f2.qualified_name()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
     }
@@ -512,7 +516,6 @@ impl From<DFSchema> for SchemaRef {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.fields.hash(state);
@@ -526,25 +529,21 @@ where
     Self: Sized,
 {
     /// Attempt to create a DSSchema
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema>;
 
     /// Attempt to create a DSSchemaRef
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema_ref(self) -> Result<DFSchemaRef> {
         Ok(Arc::new(self.to_dfschema()?))
     }
 }
 
 impl ToDFSchema for Schema {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         DFSchema::try_from(self)
     }
 }
 
 impl ToDFSchema for SchemaRef {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         // Attempt to use the Schema directly if there are no other
         // references, otherwise clone

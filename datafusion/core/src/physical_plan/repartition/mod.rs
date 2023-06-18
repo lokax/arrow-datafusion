@@ -23,8 +23,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::memory_pool::MemoryConsumer;
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::repartition::distributor_channels::channels;
 use crate::physical_plan::{
@@ -33,6 +31,8 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
@@ -42,7 +42,7 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
@@ -339,6 +339,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     
+    // 如果只有一个分区，等等
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         if self.maintains_input_order()[0] {
             self.input().output_ordering()
@@ -368,9 +369,9 @@ impl ExecutionPlan for RepartitionExec {
         // lock mutexes
         let mut state = self.state.lock();
 
-        // 输入分区数量
+        // 输入算子有几个输出分区
         let num_input_partitions = self.input.output_partitioning().partition_count();
-        // 输出分区数量
+        // 当前算子有几个输出分区
         let num_output_partitions = self.partitioning.partition_count();
 
         // if this is the first partition to be invoked then we need to set up initial state
@@ -379,7 +380,8 @@ impl ExecutionPlan for RepartitionExec {
             // note we use a custom channel that ensures there is always data for each receiver
             // but limits the amount of buffering if required.
 
-            // 注意这里创建的channel数量是和输出分区相等的
+            // 注意这里创建的channel数量是和当前算子的输出分区是相等的
+            // 创建channel，用来发送数据到输出流
             let (txs, rxs) = channels(num_output_partitions);
             for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
                 let reservation = Arc::new(Mutex::new(
@@ -394,6 +396,7 @@ impl ExecutionPlan for RepartitionExec {
             // 遍历每一个输入分区
             for i in 0..num_input_partitions {
                 // TODO(lokax): 是否可以只收集一份呢
+                // key是输出分区号，
                 let txs: HashMap<_, _> = state
                     .channels
                     .iter()
@@ -402,7 +405,7 @@ impl ExecutionPlan for RepartitionExec {
                     })
                     .collect();
 
-                // 创建指标
+                // 创建Metric
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
                 // 创建一个输入任务
@@ -410,7 +413,7 @@ impl ExecutionPlan for RepartitionExec {
                     tokio::spawn(Self::pull_from_input(
                         self.input.clone(),
                         i, // i是分区号
-                        txs.clone(), // 保存了输出分区的channel
+                        txs.clone(), // 保存了输出分区channel等信息的哈希表
                         self.partitioning.clone(), // 输出分区策略
                         r_metrics,
                         context.clone(),
@@ -511,12 +514,13 @@ impl RepartitionExec {
         r_metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
+        // 创建一个分区器
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, r_metrics.repart_time.clone())?;
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
-        // 获取某个输入分区的输入流
+        // 获取当前输入分区的输入流
         let mut stream = input.execute(i, context)?;
         timer.done();
 
@@ -524,6 +528,9 @@ impl RepartitionExec {
         // pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
         while !txs.is_empty() {
+            
+            // 从输入流中获取下一批数据
+
             // fetch the next batch
             let timer = r_metrics.fetch_time.timer();
             let result = stream.next().await;
@@ -700,8 +707,6 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use crate::{
@@ -719,6 +724,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;
 
@@ -867,7 +873,7 @@ mod tests {
         // have to send at least one batch through to provoke error
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -924,7 +930,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -958,13 +964,13 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["frob", "baz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -1110,25 +1116,25 @@ mod tests {
     fn make_barrier_exec() -> BarrierExec {
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["frob", "baz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch3 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["goo", "gar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["goo", "gar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch4 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["grob", "gaz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["grob", "gaz"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -1168,7 +1174,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
-            Arc::new(StringArray::from_slice(["foo"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
         )])
         .unwrap();
         let partitioning = Partitioning::Hash(
